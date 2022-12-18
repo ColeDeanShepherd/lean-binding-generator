@@ -1,7 +1,17 @@
 import Lean.Data.Json
 
+def allowedTypeNames := [
+  "Uint8",
+  "Uint16",
+  "Uint32",
+  "Sint8",
+  "Sint16",
+  "Sint32"
+]
+
 def allowedFuncNames := [
-  "SDL_Init"
+  "SDL_Init",
+  "SDL_CreateWindow"
 ]
 
 def readFile? (filePath: System.FilePath): IO (Except IO.Error String) := do
@@ -36,19 +46,36 @@ def getFuncReturnType? (x : Lean.Json): Option String :=
     getJsonObjPropValStr? x "name"
   else none
 
+def getTypeName? (x : Lean.Json): Option String := 
+  let tagPropVal? := getJsonObjPropValStr? x "tag"
+  if tagPropVal? == "typedef" then
+    getJsonObjPropValStr? x "name"
+  else none
+
 def shouldGenFfiCode (x : Lean.Json): Bool :=
-  let funcName? := getFuncName? x
-  if let .some funcName := funcName? then
+  if let .some funcName := (getFuncName? x) then
     allowedFuncNames.contains funcName
+  else if let .some typeName := (getTypeName? x) then
+    allowedTypeNames.contains typeName
   else
     False
 
-def genFfiType (x: Lean.Json): String :=
+partial def genFfiType (x: Lean.Json): String :=
   let tag := (getJsonObjPropValStr? x "tag").get!
   match tag with
   | ":int" => "Int32"
-  | "Uint32" => "UInt32"
-  | _ => panic! ""
+  | "uint8_t" => "UInt8"
+  | "uint16_t" => "UInt16"
+  | "uint32_t" => "UInt32"
+  | "int8_t" => "SInt8"
+  | "int16_t" => "SInt16"
+  | "int32_t" => "SInt32"
+  | ":char" => "char"
+  | ":pointer" =>
+    let internalType := (getJsonObjPropVal? x "type").get!
+    let internalTypeStr := genFfiType internalType
+    s!"{internalTypeStr}*"
+  | _ => panic! s!"Unknown FFI type: {tag}"
 
 def genParam (x: Lean.Json): String :=
   let name := (getJsonObjPropValStr? x "name").get!
@@ -60,8 +87,7 @@ def genParam (x: Lean.Json): String :=
 -- TODO: Use string builder?
 def genFfiCode? (x : Lean.Json): Option String :=
   let tagPropVal? := getJsonObjPropValStr? x "tag"
-  if tagPropVal? != "function" then none
-  else
+  if tagPropVal? == "function" then
     let namePropVal := (getJsonObjPropValStr? x "name").get!
     let paramsStr := (getJsonObjPropValArr? x "parameters").get!.toList
       |>.map genParam
@@ -70,6 +96,11 @@ def genFfiCode? (x : Lean.Json): Option String :=
 
     s!"@[extern \"{namePropVal}\"]
 constant {namePropVal} : {paramsStr} -> {returnTypeName}"
+  else if tagPropVal? == "typedef" then
+    let namePropVal := (getJsonObjPropValStr? x "name").get!
+    let type := (getJsonObjPropVal? x "type").get! |> genFfiType
+    s!"abbrev {namePropVal} := {type}"
+  else none
 
 def genBindingCode? (x: Lean.Json): Except String String :=
   match x with
@@ -79,7 +110,7 @@ def genBindingCode? (x: Lean.Json): Except String String :=
       |>.filter Option.isSome
       |>.map Option.get!
       |>.toList
-    .ok (String.intercalate (s := "¬") genCodeParts)
+    .ok (String.intercalate (s := "\n") genCodeParts)
   | _ => .error "JSON isn't an array."
 
 def main : IO Unit := do
