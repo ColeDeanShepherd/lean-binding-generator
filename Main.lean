@@ -71,21 +71,28 @@ def genFfiCode? (x : Lean.Json): Option String :=
     s!"@[extern \"{namePropVal}\"]
 constant {namePropVal} : {paramsStr} -> {returnTypeName}"
 
+def genBindingCode? (x: Lean.Json): Except String String :=
+  match x with
+  | .arr jsonArr =>
+    let genCodeParts := jsonArr.filter shouldGenFfiCode
+      |>.map genFfiCode?
+      |>.filter Option.isSome
+      |>.map Option.get!
+      |>.toList
+    .ok (String.intercalate (s := "¬") genCodeParts)
+  | _ => .error "JSON isn't an array."
+
 def main : IO Unit := do
-  -- TODO: print errors from "Either"s.
+  -- Load the contents of the c2ffi output JSON file.
   let .ok jsonStr <- readFile? "SDL2_c2ffi_output.json"
     | IO.println "Failed to load JSON file."
 
+  -- Parse the JSON.
   let .ok json := Lean.Json.parse jsonStr
     | IO.println "Failed to parse JSON."
 
-  let .arr jsonArr := json
-    | IO.println "JSON isn't an array."
-  
-  let genCodeParts := jsonArr.filter shouldGenFfiCode
-    |>.map genFfiCode?
-    |>.filter Option.isSome
-    |>.map Option.get!
+  -- Traverse the JSON and generate Lean binding code.
+  let .ok bindingCode := genBindingCode? json
+    | IO.println "Failed to generate binding code from JSON."
 
-  for x in genCodeParts do
-    IO.println x
+  IO.println bindingCode
