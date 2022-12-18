@@ -6,12 +6,27 @@ def allowedTypeNames := [
   "Uint32",
   "Sint8",
   "Sint16",
-  "Sint32"
+  "Sint32",
+  "SDL_Window",
+  "SDL_Event",
+  "SDL_Rect",
+  "SDL_Renderer"
 ]
 
 def allowedFuncNames := [
   "SDL_Init",
-  "SDL_CreateWindow"
+  "SDL_CreateWindow",
+  "SDL_GetWindowSurface",
+  "SDL_UpdateWindowSurface",
+  "SDL_Delay",
+  "SDL_CreateRenderer",
+  "SDL_RenderSetLogicalSize",
+  "SDL_RenderClear",
+  "SDL_RenderPresent",
+  "SDL_RenderDrawRect",
+  "SDL_RenderFillRect",
+  "SDL_SetRenderDrawColor",
+  "SDL_PollEvent"
 ]
 
 def readFile? (filePath: System.FilePath): IO (Except IO.Error String) := do
@@ -48,7 +63,7 @@ def getFuncReturnType? (x : Lean.Json): Option String :=
 
 def getTypeName? (x : Lean.Json): Option String := 
   let tagPropVal? := getJsonObjPropValStr? x "tag"
-  if tagPropVal? == "typedef" then
+  if tagPropVal? == "typedef" || tagPropVal? == "struct" then
     getJsonObjPropValStr? x "name"
   else none
 
@@ -70,12 +85,24 @@ partial def genFfiType (x: Lean.Json): String :=
   | "int8_t" => "SInt8"
   | "int16_t" => "SInt16"
   | "int32_t" => "SInt32"
-  | ":char" => "char"
+  | ":void" => "Unit"
+  | ":char" => "Char"
   | ":pointer" =>
     let internalType := (getJsonObjPropVal? x "type").get!
     let internalTypeStr := genFfiType internalType
-    s!"{internalTypeStr}*"
-  | _ => panic! s!"Unknown FFI type: {tag}"
+    s!"Ptr {internalTypeStr}"
+  | "struct" =>
+    let name := (getJsonObjPropValStr? x "name").get!
+    name
+  | ":struct" =>
+    let name := (getJsonObjPropValStr? x "name").get!
+    name
+  | ":union" =>
+    let name := (getJsonObjPropValStr? x "name").get!
+    name
+  | _ =>
+    tag
+    --panic! s!"Unknown FFI type: {tag}"
 
 def genParam (x: Lean.Json): String :=
   let name := (getJsonObjPropValStr? x "name").get!
@@ -95,11 +122,14 @@ def genFfiCode? (x : Lean.Json): Option String :=
     let returnTypeName := (getJsonObjPropVal? x "return-type").get! |> genFfiType
 
     s!"@[extern \"{namePropVal}\"]
-constant {namePropVal} : {paramsStr} -> {returnTypeName}"
+constant {namePropVal} : {paramsStr} -> IO {returnTypeName}"
   else if tagPropVal? == "typedef" then
     let namePropVal := (getJsonObjPropValStr? x "name").get!
     let type := (getJsonObjPropVal? x "type").get! |> genFfiType
     s!"abbrev {namePropVal} := {type}"
+  else if tagPropVal? == "struct" then
+    let namePropVal := (getJsonObjPropValStr? x "name").get!
+    s!"structure {namePropVal}"
   else none
 
 def genBindingCode? (x: Lean.Json): Except String String :=
@@ -110,7 +140,7 @@ def genBindingCode? (x: Lean.Json): Except String String :=
       |>.filter Option.isSome
       |>.map Option.get!
       |>.toList
-    .ok (String.intercalate (s := "\n") genCodeParts)
+    .ok (String.intercalate (s := "\n\n") genCodeParts)
   | _ => .error "JSON isn't an array."
 
 def main : IO Unit := do
